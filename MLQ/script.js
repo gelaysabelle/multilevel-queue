@@ -18,6 +18,7 @@ let simulationStarted = false;
 let currentTime = 0;
 let currentProcess = null;
 let quantumCounters = [0, 0, 0];
+let arrivedProcesses = new Set(); // Track which processes have already arrived
 
 let ganttBlocks = []; // For merged display
 let lastProcessTime = 0; // Track when last process ended
@@ -31,7 +32,7 @@ const defaultProcesses = [
   { name: "P4", arrivalTime: 8, burstTime: 7,  priority: 2 },
   { name: "P5", arrivalTime: 11, burstTime: 15, priority: 3 },
   { name: "P6", arrivalTime: 15, burstTime: 8,  priority: 2 },
-  { name: "P7", arrivalTime: 12, burstTime: 4,  priority: 1 },
+  { name: "P7", arrivalTime: 20, burstTime: 4,  priority: 1 },
 ];
 
 // ===== Settings =====
@@ -104,6 +105,8 @@ function resetSimulation() {
   currentProcess = null;
   ganttBlocks = [];
   lastProcessTime = 0;
+  arrivedProcesses = new Set();
+  quantumCounters = [0, 0, 0];
   processTable.innerHTML = "";
   ganttChart.innerHTML = "";
   timeIndicators.innerHTML = "";
@@ -125,36 +128,55 @@ function resetSimulation() {
 
 function startSimulation() {
   if (simulationStarted) return;
+  
+  // Reset state
   processes = [];
+  readyQueues = [[], [], []];
+  arrivedProcesses = new Set();
+  currentProcess = null;
+  currentTime = 0;
+  ganttBlocks = [];
+  lastProcessTime = 0;
+  quantumCounters = [0, 0, 0];
+  
+  // Read processes from table
   for (let row of processTable.rows) {
     let [name, at, bt, prio] = Array.from(row.cells).map(c => c.firstChild.value);
     if (!name || at === "" || bt === "" || prio === "") continue;
+    
+    let arrivalTime = parseInt(at);
+    let burstTime = parseInt(bt);
+    let priority = parseInt(prio);
+    
+    // Validate inputs
+    if (priority < 1 || priority > 3) {
+      alert(`Invalid priority for ${name}. Priority must be between 1 and 3.`);
+      return;
+    }
+    
     processes.push({
       name,
-      arrivalTime: parseInt(at),
-      burstTime: parseInt(bt),
-      remainingTime: parseInt(bt),
-      priority: parseInt(prio),
+      arrivalTime,
+      burstTime,
+      remainingTime: burstTime,
+      priority,
       processingTime: 0,
       waitingTime: 0
     });
   }
+  
+  if (processes.length === 0) {
+    alert("Please add at least one process before starting the simulation.");
+    return;
+  }
+  
   simulationStarted = true;
   document.getElementById("nextStepBtn").disabled = false;
   
   // Render initial state (time 0)
   renderUI();
   
-  // Debug: Test if we can manually add a process to see if UI works
-  console.log("Testing UI by manually adding P1 to queue...");
-  if (processes.length > 0) {
-    let p1 = processes.find(p => p.name === "P1");
-    if (p1) {
-      readyQueues[p1.priority - 1].push(p1);
-      console.log("Manually added P1 to queue, re-rendering...");
-      renderUI();
-    }
-  }
+  console.log("Simulation started with processes:", processes);
 }
 
 // ===== MLQ Core Functions =====
@@ -167,18 +189,9 @@ function handleRoundRobinScheduling(settings) {
       if (readyQueues[lvl].length > 0) {
         currentProcess = readyQueues[lvl].shift();
         quantumCounters[lvl] = settings.quantum[lvl];
+        console.log(`Selected ${currentProcess.name} from priority ${lvl + 1}, quantum: ${quantumCounters[lvl]}`);
         break;
       }
-    }
-  } else {
-    // Decrement quantum counter
-    let lvl = currentProcess.priority - 1;
-    quantumCounters[lvl]--;
-    
-    // Check if quantum expired and process still has remaining time
-    if (quantumCounters[lvl] <= 0 && currentProcess.remainingTime > 0) {
-      readyQueues[lvl].push(currentProcess);
-      currentProcess = null;
     }
   }
 }
@@ -186,51 +199,50 @@ function handleRoundRobinScheduling(settings) {
 // Priority Management Functions
 function handleProcessArrivals() {
   processes.forEach(p => {
-    if (p.arrivalTime === currentTime) {
+    if (p.arrivalTime === currentTime && !arrivedProcesses.has(p.name)) {
       console.log(`Process ${p.name} arriving at time ${currentTime}, adding to priority ${p.priority} queue`);
       readyQueues[p.priority - 1].push(p);
+      arrivedProcesses.add(p.name);
     }
   });
-}
-
-function handleProcessCompletion() {
-  if (currentProcess && currentProcess.remainingTime <= 0) {
-    currentProcess = null;
-  }
 }
 
 // Aging and Starvation Management
-function handleAgingAndStarvation() {
-  processes.forEach(p => {
-    if (p.remainingTime <= 0) return;
-    
-    // Starvation - waiting time reaches 5, increase priority and reset waiting time
-    if (p.waitingTime >= 5 && p.priority > 1) {
-      p.priority--;
-      p.waitingTime = 0;
+function handleAgingAndStarvation(settings) {
+  // Check each process in each ready queue for aging/starvation
+  for (let lvl = 0; lvl < 3; lvl++) {
+    let queue = readyQueues[lvl];
+    for (let i = queue.length - 1; i >= 0; i--) {
+      let p = queue[i];
+      
+      // Starvation - waiting time reaches starvationInterval, increase priority (move to higher priority queue)
+      if (p.waitingTime >= settings.starvationInterval && p.priority > 1) {
+        console.log(`Starvation: ${p.name} moving from priority ${p.priority} to ${p.priority - 1}`);
+        queue.splice(i, 1); // Remove from current queue
+        p.priority--;
+        p.waitingTime = 0;
+        readyQueues[p.priority - 1].push(p); // Add to higher priority queue
+      }
+      // Aging - processing time reaches agingInterval, decrease priority (move to lower priority queue)
+      else if (p.processingTime >= settings.agingInterval && p.priority < 3) {
+        console.log(`Aging: ${p.name} moving from priority ${p.priority} to ${p.priority + 1}`);
+        queue.splice(i, 1); // Remove from current queue
+        p.priority++;
+        p.processingTime = 0;
+        readyQueues[p.priority - 1].push(p); // Add to lower priority queue
+      }
     }
-    
-    // Aging - processing time reaches 6, decrease priority and reset processing time
-    if (p.processingTime >= 6 && p.priority < 3) {
-      p.priority++;
-      p.processingTime = 0;
-    }
-  });
-}
-
-// Time Management
-function updateProcessTiming() {
-  // Update current process
-  if (currentProcess) {
-    currentProcess.processingTime++;
-    currentProcess.remainingTime--;
   }
   
-  // Update waiting time for all processes in queues
-  for (let lvl = 0; lvl < 3; lvl++) {
-    readyQueues[lvl].forEach(p => {
-      if (p !== currentProcess) p.waitingTime++;
-    });
+  // Also check current process for aging
+  if (currentProcess && currentProcess.processingTime >= settings.agingInterval && currentProcess.priority < 3) {
+    console.log(`Aging: Current process ${currentProcess.name} moving from priority ${currentProcess.priority} to ${currentProcess.priority + 1}`);
+    // Move current process to lower priority queue
+    currentProcess.priority++;
+    currentProcess.processingTime = 0;
+    readyQueues[currentProcess.priority - 1].push(currentProcess);
+    currentProcess = null; // Release the CPU so scheduler picks next process
+    // Don't move it yet, let it finish its quantum
   }
 }
 
@@ -260,26 +272,54 @@ function nextStep() {
 
   // 1. Increment time first
   currentTime++;
+  currentTimeDisplay.textContent = currentTime;
 
-  // 2. Update process timing
-  updateProcessTiming();
-
-  // 3. Handle aging and starvation
-  handleAgingAndStarvation();
-
-  // 4. Handle new process arrivals
+  // 2. Handle new process arrivals (before any processing)
   handleProcessArrivals();
 
-  // 5. Handle process completion
-  handleProcessCompletion();
+  // 3. If current process exists, execute it for this time unit
+  if (currentProcess) {
+    currentProcess.processingTime++;
+    currentProcess.remainingTime--;
+    
+    let lvl = currentProcess.priority - 1;
+    quantumCounters[lvl]--;
+    
+    console.log(`Time ${currentTime}: Executing ${currentProcess.name}, remaining: ${currentProcess.remainingTime}, quantum left: ${quantumCounters[lvl]}`);
+  }
 
-  // 6. Apply Round Robin scheduling
-  handleRoundRobinScheduling(settings);
+  // 4. Update waiting time for all processes in ready queues (not the running one)
+  for (let lvl = 0; lvl < 3; lvl++) {
+    readyQueues[lvl].forEach(p => {
+      p.waitingTime++;
+    });
+  }
 
-  // 7. Update Gantt chart
+  // 5. Update Gantt chart
   updateGanttChart();
 
-  // 8. Render UI
+  // 6. Check if current process completed
+  if (currentProcess && currentProcess.remainingTime <= 0) {
+    console.log(`Process ${currentProcess.name} completed at time ${currentTime}`);
+    currentProcess = null;
+  }
+  // 7. Check if quantum expired (and process not completed)
+  else if (currentProcess) {
+    let lvl = currentProcess.priority - 1;
+    if (quantumCounters[lvl] <= 0) {
+      console.log(`Quantum expired for ${currentProcess.name}, moving back to priority ${currentProcess.priority} queue`);
+      readyQueues[lvl].push(currentProcess);
+      currentProcess = null;
+    }
+  }
+
+  // 8. Handle aging and starvation (check both running process and waiting processes)
+  handleAgingAndStarvation(settings);
+
+  // 9. Select next process if none is running
+  handleRoundRobinScheduling(settings);
+
+  // 10. Render UI
   renderUI();
 }
 
@@ -290,27 +330,50 @@ function renderUI() {
   
   // Debug: Log queue states
   console.log(`Time ${currentTime}: Priority queues:`, readyQueues.map((q, i) => `Level ${i+1}: [${q.map(p => p.name).join(', ')}]`));
+  if (currentProcess) {
+    console.log(`Current process: ${currentProcess.name} (Priority ${currentProcess.priority})`);
+  }
   
   // Clear all priority bars
   priorityBars.forEach(bar => bar.innerHTML = "");
   
-  // Render each priority level - only show processes that are actually in the ready queues
-  readyQueues.forEach((queue, priorityIndex) => {
-    let bar = priorityBars[priorityIndex];
-    console.log(`Rendering Priority Level ${priorityIndex + 1}: ${queue.length} processes`);
+  // Render each priority level
+  for (let lvl = 0; lvl < 3; lvl++) {
+    let bar = priorityBars[lvl];
+    let queue = readyQueues[lvl];
     
-    if (queue.length === 0) {
+    // Check if current process belongs to this priority level
+    let showCurrentProcess = currentProcess && (currentProcess.priority - 1) === lvl;
+    
+    console.log(`Rendering Priority Level ${lvl + 1}: ${queue.length} processes${showCurrentProcess ? ' + current process' : ''}`);
+    
+    if (queue.length === 0 && !showCurrentProcess) {
       bar.innerHTML = '<div class="empty">No processes in this priority level</div>';
       bar.classList.add('empty');
     } else {
       bar.classList.remove('empty');
+      
+      // Show current process first if it belongs to this level
+      if (showCurrentProcess) {
+        let card = document.createElement('div');
+        card.className = 'process-card current';
+        card.innerHTML = `
+          <div class="process-name">${currentProcess.name} [RUNNING]</div>
+          <div class="process-info">
+            <span><span class="label">Remaining BT:</span> ${currentProcess.remainingTime}</span>
+            <span><span class="label">Processing Time:</span> ${currentProcess.processingTime}</span>
+            <span><span class="label">Waiting Time:</span> ${currentProcess.waitingTime}</span>
+            <span><span class="label">Arrival Time:</span> ${currentProcess.arrivalTime}</span>
+          </div>
+        `;
+        bar.appendChild(card);
+      }
+      
+      // Show waiting processes
       queue.forEach(p => {
-        console.log(`Adding process ${p.name} to Priority Level ${priorityIndex + 1} bar`);
+        console.log(`Adding process ${p.name} to Priority Level ${lvl + 1} bar`);
         let card = document.createElement('div');
         card.className = 'process-card';
-        if (p === currentProcess) {
-          card.classList.add('current');
-        }
         
         card.innerHTML = `
           <div class="process-name">${p.name}</div>
@@ -324,38 +387,6 @@ function renderUI() {
         
         bar.appendChild(card);
       });
-    }
-  });
-  
-  // Also show the currently running process if it exists
-  if (currentProcess) {
-    let priorityIndex = currentProcess.priority - 1;
-    let bar = priorityBars[priorityIndex];
-    bar.classList.remove('empty');
-    
-    // Check if current process is already shown in the queue
-    let currentProcessShown = false;
-    for (let card of bar.children) {
-      if (card.querySelector('.process-name').textContent === currentProcess.name) {
-        currentProcessShown = true;
-        break;
-      }
-    }
-    
-    // If not shown, add it to the appropriate priority bar
-    if (!currentProcessShown) {
-      let card = document.createElement('div');
-      card.className = 'process-card current';
-      card.innerHTML = `
-        <div class="process-name">${currentProcess.name}</div>
-        <div class="process-info">
-          <span><span class="label">Remaining BT:</span> ${currentProcess.remainingTime}</span>
-          <span><span class="label">Processing Time:</span> ${currentProcess.processingTime}</span>
-          <span><span class="label">Waiting Time:</span> ${currentProcess.waitingTime}</span>
-          <span><span class="label">Arrival Time:</span> ${currentProcess.arrivalTime}</span>
-        </div>
-      `;
-      bar.appendChild(card);
     }
   }
 
