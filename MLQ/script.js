@@ -51,7 +51,13 @@ function getSettings() {
       parseInt(document.getElementById("quantum3").value),
     ],
     agingInterval: parseInt(document.getElementById("agingInterval").value),
-    starvationInterval: parseInt(document.getElementById("starvationInterval").value)
+    starvationInterval: parseInt(document.getElementById("starvationInterval").value),
+    // Optional UI control; if missing, fallback to 6 (example) to remain configurable
+    expiryDemotionInterval: (function() {
+      const el = document.getElementById("expiryDemotionInterval");
+      const v = el ? parseInt(el.value) : NaN;
+      return Number.isFinite(v) && v > 0 ? v : 6;
+    })()
   };
 }
 
@@ -215,7 +221,9 @@ function handleRoundRobinScheduling(settings) {
       if (readyQueues[lvl].length > 0) {
         currentProcess = readyQueues[lvl].shift();
         quantumCounters[lvl] = settings.quantum[lvl];
-        console.log(`Selected ${currentProcess.name} from priority ${lvl + 1}, quantum: ${quantumCounters[lvl]}`);
+        // Reset waiting time when process is selected to run in CPU
+        currentProcess.waitingTime = 0;
+        console.log(`Selected ${currentProcess.name} from priority ${lvl + 1}, quantum: ${quantumCounters[lvl]}, waitingTime reset to 0`);
         break;
       }
     }
@@ -269,6 +277,23 @@ function handleAgingAndStarvation(settings) {
     readyQueues[currentProcess.priority - 1].push(currentProcess);
     currentProcess = null; // Release the CPU so scheduler picks next process
     // Don't move it yet, let it finish its quantum
+  }
+}
+
+// Starvation promotions ONLY: run before arrivals as first precedence
+function handleStarvationPromotions(settings) {
+  for (let lvl = 0; lvl < 3; lvl++) {
+    let queue = readyQueues[lvl];
+    for (let i = queue.length - 1; i >= 0; i--) {
+      let p = queue[i];
+      if (p.waitingTime >= settings.starvationInterval && p.priority > 1) {
+        console.log(`Starvation (pre-arrival): ${p.name} moving from priority ${p.priority} to ${p.priority - 1}`);
+        queue.splice(i, 1);
+        p.priority--;
+        p.waitingTime = 0;
+        readyQueues[p.priority - 1].push(p);
+      }
+    }
   }
 }
 
@@ -327,10 +352,18 @@ function nextStep() {
   // NEW: Append a *single* tick for this new time unit (axis is append-only)
   appendTickPerUnit(currentTime); // keeps "0..t" laid out without touching earlier ticks
 
-  // 2. Handle new process arrivals (before any processing)
+  // 2. First precedence: increment waiting time for all queued processes, then promote due to starvation
+  for (let lvl = 0; lvl < 3; lvl++) {
+    readyQueues[lvl].forEach(p => {
+      p.waitingTime++;
+    });
+  }
+  handleStarvationPromotions(settings);
+
+  // 3. Second precedence: handle new process arrivals
   handleProcessArrivals();
 
-  // 3. If current process exists, execute it for this time unit
+  // 4. If current process exists, execute it for this time unit
   if (currentProcess) {
     currentProcess.processingTime++;
     currentProcess.remainingTime--;
@@ -339,13 +372,6 @@ function nextStep() {
     quantumCounters[lvl]--;
     
     console.log(`Time ${currentTime}: Executing ${currentProcess.name}, remaining: ${currentProcess.remainingTime}, quantum left: ${quantumCounters[lvl]}`);
-  }
-
-  // 4. Update waiting time for all processes in ready queues (not the running one)
-  for (let lvl = 0; lvl < 3; lvl++) {
-    readyQueues[lvl].forEach(p => {
-      p.waitingTime++;
-    });
   }
 
   // 5. Update Gantt chart (records the elapsed slot [t-1, t])
@@ -360,8 +386,18 @@ function nextStep() {
   else if (currentProcess) {
     let lvl = currentProcess.priority - 1;
     if (quantumCounters[lvl] <= 0) {
-      console.log(`Quantum expired for ${currentProcess.name}, moving back to priority ${currentProcess.priority} queue`);
-      readyQueues[lvl].push(currentProcess);
+      // Third precedence: re-enqueue the running process with optional demotion based on processing units
+      const demoteThreshold = settings.expiryDemotionInterval;
+      let targetPriority = currentProcess.priority;
+      if (currentProcess.processingTime >= demoteThreshold && currentProcess.priority < 3) {
+        targetPriority = currentProcess.priority + 1; // decrease priority number means higher; here larger number is lower priority, so +1
+        console.log(`Quantum expired for ${currentProcess.name}; processingTime=${currentProcess.processingTime} >= ${demoteThreshold}. Demoting to priority ${targetPriority} and resetting processingTime.`);
+        currentProcess.priority = targetPriority;
+        currentProcess.processingTime = 0;
+      } else {
+        console.log(`Quantum expired for ${currentProcess.name}, re-enqueue at same priority ${currentProcess.priority}`);
+      }
+      readyQueues[currentProcess.priority - 1].push(currentProcess);
       currentProcess = null;
     }
   }
