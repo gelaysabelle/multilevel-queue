@@ -24,6 +24,13 @@ let ganttBlocks = []; // For merged display
 let lastProcessTime = 0; // Track when last process ended
 let nextProcessNumber = 8; // For automatic consecutive naming
 
+// NEW: one pixel size for one time unit (kept in JS and also pushed to CSS var)
+const TIME_UNIT_PX = 40;
+
+// NEW: append-only time axis state (keeps "0" anchored and prevents shifting)
+let axisZeroPlaced = false;      // we place the "0" tick once per simulation
+let lastTickValue = 0;           // last time value appended to the axis (monotonic)
+
 // Default processes
 const defaultProcesses = [
   { name: "P1", arrivalTime: 1, burstTime: 20, priority: 3 },
@@ -122,6 +129,10 @@ function resetSimulation() {
   
   document.getElementById("nextStepBtn").disabled = true;
 
+  // NEW: reset axis state (so "0" will be placed once on next start)
+  axisZeroPlaced = false;
+  lastTickValue = 0;
+
   // Restore default rows after reset
   defaultProcesses.forEach(p => addRow(p.name, p.arrivalTime, p.burstTime, p.priority));
 }
@@ -138,7 +149,14 @@ function startSimulation() {
   ganttBlocks = [];
   lastProcessTime = 0;
   quantumCounters = [0, 0, 0];
-  
+
+  // NEW: publish unit width to CSS so layout stays consistent
+  document.documentElement.style.setProperty('--unit', `${TIME_UNIT_PX}px`);
+
+  // NEW: lay down the single immutable zero tick before any rendering
+  ensureAxisZero();   // appends "0" once; keeps axis anchored
+  lastTickValue = 0;  // axis currently shows only 0
+
   // Read processes from table
   for (let row of processTable.rows) {
     let [name, at, bt, prio] = Array.from(row.cells).map(c => c.firstChild.value);
@@ -172,6 +190,14 @@ function startSimulation() {
   
   simulationStarted = true;
   document.getElementById("nextStepBtn").disabled = false;
+
+  // NEW: keep Gantt bars and axis horizontally in sync while scrolling
+  initScrollSync();
+
+  // NEW: re-align axis with chart after a resize (keeps same scrollLeft)
+  window.addEventListener('resize', () => {
+    timeIndicators.scrollLeft = ganttChart.scrollLeft;
+  });
   
   // Render initial state (time 0)
   renderUI();
@@ -248,31 +274,58 @@ function handleAgingAndStarvation(settings) {
 
 // Gantt Chart Management
 function updateGanttChart() {
+  // NEW: use the *elapsed time slot* [currentTime - 1, currentTime]
+  const slotStart = Math.max(0, currentTime - 1);
+  const slotEnd = currentTime;
+
   if (currentProcess) {
     let lastBlock = ganttBlocks[ganttBlocks.length - 1];
-    if (lastBlock && lastBlock.name === currentProcess.name) {
-      lastBlock.end = currentTime + 1;
+    if (lastBlock && !lastBlock.isIdle && lastBlock.name === currentProcess.name) {
+      // extend current block by this one time unit
+      lastBlock.end = slotEnd;
     } else {
-      // Check for idle period before adding new process
-      if (lastProcessTime < currentTime) {
-        ganttBlocks.push({ name: "Idle", start: lastProcessTime, end: currentTime, isIdle: true });
+      // If there was a gap before this slot, close it with Idle
+      if (lastProcessTime < slotStart) {
+        ganttBlocks.push({ name: "Idle", start: lastProcessTime, end: slotStart, isIdle: true });
       }
-      ganttBlocks.push({ name: currentProcess.name, start: currentTime, end: currentTime + 1, isIdle: false });
+      // Add a new block for the running process covering this single time unit
+      ganttBlocks.push({ name: currentProcess.name, start: slotStart, end: slotEnd, isIdle: false });
     }
-    lastProcessTime = currentTime + 1;
+    lastProcessTime = slotEnd;
   } else {
-    // No process running - will be handled in next iteration
-    lastProcessTime = currentTime;
+    // NEW: explicitly record idle for this slot so the early 0..1 idle shows up correctly
+    if (lastProcessTime < slotEnd) {
+      const last = ganttBlocks[ganttBlocks.length - 1];
+      if (last && last.isIdle) {
+        last.end = slotEnd; // extend previous idle
+      } else {
+        ganttBlocks.push({ name: "Idle", start: slotStart, end: slotEnd, isIdle: true });
+      }
+      lastProcessTime = slotEnd;
+    }
   }
+}
+
+// ===== Simulation completion guard =====
+function isSimulationComplete() {
+  const queuesEmpty = readyQueues.every(q => q.length === 0);
+  const noCurrent = currentProcess === null;
+  const allDone = processes.length > 0 && processes.every(p => p.remainingTime <= 0);
+  return queuesEmpty && noCurrent && allDone;
 }
 
 // ===== Main Simulation Step =====
 function nextStep() {
+  if (!simulationStarted) return;
+
   let settings = getSettings();
 
   // 1. Increment time first
   currentTime++;
   currentTimeDisplay.textContent = currentTime;
+
+  // NEW: Append a *single* tick for this new time unit (axis is append-only)
+  appendTickPerUnit(currentTime); // keeps "0..t" laid out without touching earlier ticks
 
   // 2. Handle new process arrivals (before any processing)
   handleProcessArrivals();
@@ -295,7 +348,7 @@ function nextStep() {
     });
   }
 
-  // 5. Update Gantt chart
+  // 5. Update Gantt chart (records the elapsed slot [t-1, t])
   updateGanttChart();
 
   // 6. Check if current process completed
@@ -318,6 +371,13 @@ function nextStep() {
 
   // 9. Select next process if none is running
   handleRoundRobinScheduling(settings);
+
+  // NEW: if everything is done, lock the Next Step button so axis can't keep growing
+  if (isSimulationComplete()) {
+    document.getElementById("nextStepBtn").disabled = true;
+    simulationStarted = false;
+    console.log("Simulation complete at time", currentTime);
+  }
 
   // 10. Render UI
   renderUI();
@@ -390,45 +450,80 @@ function renderUI() {
     }
   }
 
-  // Gantt Chart
+  // Gantt Chart (bars). IMPORTANT: axis is handled incrementally; do not clear it here.
   ganttChart.innerHTML = "";
-  timeIndicators.innerHTML = "";
-  
   if (ganttBlocks.length === 0) {
-    // Show initial state
+    // Show initial state (bars only; axis "0" was placed at startSimulation)
     let div = document.createElement("div");
     div.className = "gantt-block idle";
-    div.style.minWidth = "40px";
+    // exact sizing + no shrink to avoid flex rounding on narrow screens
+    const w = TIME_UNIT_PX;
+    div.style.width = `${w}px`;
+    div.style.flex = `0 0 ${w}px`;
     div.innerText = "Idle";
     ganttChart.appendChild(div);
-    
-    let marker = document.createElement("div");
-    marker.className = "time-marker";
-    marker.style.minWidth = "40px";
-    marker.innerText = "0";
-    timeIndicators.appendChild(marker);
   } else {
-    ganttBlocks.forEach((block, i) => {
+    ganttBlocks.forEach((block) => {
       let div = document.createElement("div");
       div.className = block.isIdle ? "gantt-block idle" : "gantt-block";
-      div.style.minWidth = (block.end - block.start) * 40 + "px";
+      const w = (block.end - block.start) * TIME_UNIT_PX;
+      // exact width + prevent flex-shrink
+      div.style.width = `${w}px`;
+      div.style.flex = `0 0 ${w}px`;
       div.innerText = block.name;
       ganttChart.appendChild(div);
-
-      let marker = document.createElement("div");
-      marker.className = "time-marker";
-      marker.style.minWidth = (block.end - block.start) * 40 + "px";
-      marker.innerText = block.start;
-      timeIndicators.appendChild(marker);
-
-      if (i === ganttBlocks.length - 1) {
-        let endMarker = document.createElement("div");
-        endMarker.className = "time-marker";
-        endMarker.innerText = block.end;
-        timeIndicators.appendChild(endMarker);
-      }
     });
   }
+}
+
+// NEW: axis helpers (append-only; never remove earlier ticks)
+function ensureAxisZero() {
+  if (axisZeroPlaced) return;
+  const zero = document.createElement("div");
+  zero.className = "time-marker";
+  const w = TIME_UNIT_PX;
+  zero.style.width = `${w}px`;
+  zero.style.flex = `0 0 ${w}px`; // prevent shrink on small viewports
+  zero.textContent = "0";
+  timeIndicators.appendChild(zero);
+  axisZeroPlaced = true;
+}
+
+function appendTickPerUnit(value) {
+  // Ensure 0 exists exactly once
+  ensureAxisZero();
+
+  // Only append forward (protects against duplicate calls)
+  if (value <= lastTickValue) return;
+
+  // Append ticks up to 'value' (covers any skipped increments)
+  for (let t = lastTickValue + 1; t <= value; t++) {
+    const marker = document.createElement("div");
+    marker.className = "time-marker";
+    const w = TIME_UNIT_PX;
+    marker.style.width = `${w}px`;
+    marker.style.flex = `0 0 ${w}px`; // prevent shrink
+    marker.textContent = String(t);
+    timeIndicators.appendChild(marker);
+  }
+  lastTickValue = value;
+}
+
+// NEW: keep bars and axis scrolled together
+function initScrollSync() {
+  let syncing = false;
+  ganttChart.addEventListener("scroll", () => {
+    if (syncing) return;
+    syncing = true;
+    timeIndicators.scrollLeft = ganttChart.scrollLeft;
+    syncing = false;
+  });
+  timeIndicators.addEventListener("scroll", () => {
+    if (syncing) return;
+    syncing = true;
+    ganttChart.scrollLeft = timeIndicators.scrollLeft;
+    syncing = false;
+  });
 }
 
 // ===== Event Listeners =====
