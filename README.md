@@ -523,3 +523,456 @@ function exportResults(format) {
 These enhancement scenarios provide a roadmap for extending the Multi-Level Queue Scheduler Simulator. Each enhancement adds new educational value and demonstrates different aspects of operating system scheduling. The modular design of the current code makes it relatively easy to implement these enhancements incrementally.
 
 Choose enhancements based on your educational goals, available time, and technical complexity preferences. Start with high-priority items for quick wins, then gradually add more sophisticated features.
+
+# Advanced Aging Mechanisms for Multi-Level Queue Scheduler
+
+## Overview
+
+Advanced aging mechanisms go beyond simple time-based priority adjustments to create more sophisticated and fair scheduling systems. These mechanisms consider multiple factors to make intelligent decisions about when and how to adjust process priorities.
+
+## Current Implementation Analysis
+
+Your current aging mechanism is relatively simple:
+```javascript
+// Current aging - only based on processing time
+if (p.processingTime >= settings.agingInterval && p.priority < 3) {
+  console.log(`Aging: ${p.name} moving from priority ${p.priority} to ${p.priority + 1}`);
+  queue.splice(i, 1);
+  p.priority++;
+  p.processingTime = 0;
+  readyQueues[p.priority - 1].push(p);
+}
+```
+
+## 1. Multi-Factor Aging System
+
+### Concept
+Instead of using only processing time, consider multiple factors that contribute to a process's "age" and priority adjustment needs.
+
+### Implementation
+```javascript
+class AdvancedAgingSystem {
+  constructor() {
+    this.agingFactors = {
+      processingTime: 0.3,      // 30% weight
+      waitingTime: 0.25,        // 25% weight
+      totalTime: 0.2,           // 20% weight
+      ioTime: 0.15,             // 15% weight
+      responseTime: 0.1         // 10% weight
+    };
+    
+    this.agingThresholds = {
+      promotion: 0.7,           // Score above 0.7 promotes process
+      demotion: 0.8             // Score above 0.8 demotes process
+    };
+  }
+
+  calculateAgingScore(process, currentTime) {
+    const factors = this.agingFactors;
+    
+    // Normalize each factor to 0-1 scale
+    const processingScore = Math.min(process.processingTime / 20, 1);
+    const waitingScore = Math.min(process.waitingTime / 15, 1);
+    const totalScore = Math.min((currentTime - process.arrivalTime) / 30, 1);
+    const ioScore = Math.min((process.ioTime || 0) / 10, 1);
+    const responseScore = Math.min((process.responseTime || 0) / 5, 1);
+    
+    return (processingScore * factors.processingTime) +
+           (waitingScore * factors.waitingTime) +
+           (totalScore * factors.totalTime) +
+           (ioScore * factors.ioTime) +
+           (responseScore * factors.responseTime);
+  }
+
+  shouldPromote(process, currentTime) {
+    const score = this.calculateAgingScore(process, currentTime);
+    return score >= this.agingThresholds.promotion && process.priority > 1;
+  }
+
+  shouldDemote(process, currentTime) {
+    const score = this.calculateAgingScore(process, currentTime);
+    return score >= this.agingThresholds.demotion && process.priority < 3;
+  }
+}
+```
+
+## 2. Dynamic Aging Intervals
+
+### Concept
+Instead of fixed aging intervals, use dynamic intervals that adjust based on system load and process characteristics.
+
+### Implementation
+```javascript
+class DynamicAgingIntervals {
+  constructor() {
+    this.baseIntervals = {
+      promotion: 5,
+      demotion: 8
+    };
+    this.loadFactors = {
+      high: 0.7,    // Reduce intervals when system is busy
+      medium: 1.0,  // Normal intervals
+      low: 1.3      // Increase intervals when system is idle
+    };
+  }
+
+  calculateSystemLoad() {
+    const totalProcesses = processes.length;
+    const activeProcesses = processes.filter(p => p.remainingTime > 0).length;
+    const queueLengths = readyQueues.map(q => q.length);
+    const totalQueueLength = queueLengths.reduce((sum, len) => sum + len, 0);
+    
+    // Calculate load factor (0-1)
+    const loadFactor = Math.min(totalQueueLength / (totalProcesses * 2), 1);
+    
+    if (loadFactor > 0.7) return 'high';
+    if (loadFactor > 0.3) return 'medium';
+    return 'low';
+  }
+
+  getAdjustedIntervals() {
+    const load = this.calculateSystemLoad();
+    const factor = this.loadFactors[load];
+    
+    return {
+      promotion: Math.max(1, Math.floor(this.baseIntervals.promotion * factor)),
+      demotion: Math.max(1, Math.floor(this.baseIntervals.demotion * factor))
+    };
+  }
+}
+```
+
+## 3. Priority-Based Aging Rates
+
+### Concept
+Different priority levels should have different aging rates. High-priority processes might age faster (get demoted sooner) to prevent monopolization.
+
+### Implementation
+```javascript
+class PriorityBasedAging {
+  constructor() {
+    this.agingRates = {
+      1: { promotion: 0.8, demotion: 0.6 },  // High priority ages faster
+      2: { promotion: 1.0, demotion: 1.0 },  // Medium priority normal rate
+      3: { promotion: 1.2, demotion: 1.4 }   // Low priority ages slower
+    };
+  }
+
+  getAgingRate(priority, type) {
+    return this.agingRates[priority][type];
+  }
+
+  calculateEffectiveAging(process, baseAging) {
+    const rate = this.getAgingRate(process.priority, 'demotion');
+    return baseAging * rate;
+  }
+}
+```
+
+## 4. Context-Aware Aging
+
+### Concept
+Consider the context of the process when making aging decisions. For example, a process that just completed I/O might deserve a temporary priority boost.
+
+### Implementation
+```javascript
+class ContextAwareAging {
+  constructor() {
+    this.contextFactors = {
+      ioReturn: 1.5,           // Boost after I/O completion
+      quantumExpiry: 0.8,      // Slight boost after quantum expiry
+      starvation: 2.0,         // Strong boost for starved processes
+      newArrival: 1.0          // Normal aging for new arrivals
+    };
+  }
+
+  getContextFactor(process) {
+    // Check if process just returned from I/O
+    if (process.justReturnedFromIO) {
+      process.justReturnedFromIO = false;
+      return this.contextFactors.ioReturn;
+    }
+    
+    // Check if process just expired its quantum
+    if (process.justExpiredQuantum) {
+      process.justExpiredQuantum = false;
+      return this.contextFactors.quantumExpiry;
+    }
+    
+    // Check for starvation
+    if (process.waitingTime > 10) {
+      return this.contextFactors.starvation;
+    }
+    
+    return this.contextFactors.newArrival;
+  }
+
+  adjustAgingDecision(process, baseDecision) {
+    const factor = this.getContextFactor(process);
+    return baseDecision * factor;
+  }
+}
+```
+
+## 5. Machine Learning-Based Aging
+
+### Concept
+Use machine learning to predict optimal aging decisions based on historical process behavior and system performance.
+
+### Implementation
+```javascript
+class MLAgingSystem {
+  constructor() {
+    this.trainingData = [];
+    this.model = null;
+    this.features = [
+      'processingTime', 'waitingTime', 'totalTime', 'ioTime',
+      'responseTime', 'priority', 'burstTime', 'queueLength'
+    ];
+  }
+
+  extractFeatures(process, systemState) {
+    return {
+      processingTime: process.processingTime,
+      waitingTime: process.waitingTime,
+      totalTime: currentTime - process.arrivalTime,
+      ioTime: process.ioTime || 0,
+      responseTime: process.responseTime || 0,
+      priority: process.priority,
+      burstTime: process.burstTime,
+      queueLength: readyQueues[process.priority - 1].length
+    };
+  }
+
+  predictAgingDecision(process, systemState) {
+    const features = this.extractFeatures(process, systemState);
+    
+    // Simple decision tree (in real implementation, use actual ML model)
+    if (features.waitingTime > 15) return 'promote';
+    if (features.processingTime > 20) return 'demote';
+    if (features.ioTime > 5) return 'promote';
+    
+    return 'maintain';
+  }
+
+  recordDecision(process, decision, outcome) {
+    this.trainingData.push({
+      features: this.extractFeatures(process, {}),
+      decision: decision,
+      outcome: outcome
+    });
+  }
+}
+```
+
+## 6. Fairness-Based Aging
+
+### Concept
+Ensure that aging decisions promote fairness across all processes, not just individual process optimization.
+
+### Implementation
+```javascript
+class FairnessAging {
+  constructor() {
+    this.fairnessMetrics = {
+      maxWaitingTime: 0,
+      minWaitingTime: Infinity,
+      averageWaitingTime: 0
+    };
+  }
+
+  calculateFairnessMetrics() {
+    const waitingTimes = processes
+      .filter(p => p.remainingTime > 0)
+      .map(p => p.waitingTime);
+    
+    if (waitingTimes.length === 0) return;
+    
+    this.fairnessMetrics.maxWaitingTime = Math.max(...waitingTimes);
+    this.fairnessMetrics.minWaitingTime = Math.min(...waitingTimes);
+    this.fairnessMetrics.averageWaitingTime = 
+      waitingTimes.reduce((sum, time) => sum + time, 0) / waitingTimes.length;
+  }
+
+  calculateFairnessScore() {
+    if (this.fairnessMetrics.maxWaitingTime === 0) return 1;
+    
+    const range = this.fairnessMetrics.maxWaitingTime - this.fairnessMetrics.minWaitingTime;
+    const average = this.fairnessMetrics.averageWaitingTime;
+    
+    // Lower range and closer to average = more fair
+    return Math.max(0, 1 - (range / (average * 2)));
+  }
+
+  shouldPromoteForFairness(process) {
+    const fairnessScore = this.calculateFairnessScore();
+    const processWaitingRatio = process.waitingTime / this.fairnessMetrics.averageWaitingTime;
+    
+    // Promote if process is waiting much longer than average and system is unfair
+    return fairnessScore < 0.5 && processWaitingRatio > 1.5;
+  }
+}
+```
+
+## 7. Complete Advanced Aging Implementation
+
+### Integration with Existing Code
+```javascript
+// Enhanced process object
+class EnhancedProcess {
+  constructor(name, arrivalTime, burstTime, priority) {
+    this.name = name;
+    this.arrivalTime = arrivalTime;
+    this.burstTime = burstTime;
+    this.remainingTime = burstTime;
+    this.priority = priority;
+    this.processingTime = 0;
+    this.waitingTime = 0;
+    this.ioTime = 0;
+    this.responseTime = 0;
+    this.justReturnedFromIO = false;
+    this.justExpiredQuantum = false;
+    this.lastAgingCheck = 0;
+  }
+}
+
+// Advanced aging system integration
+class AdvancedAgingManager {
+  constructor() {
+    this.agingSystem = new AdvancedAgingSystem();
+    this.dynamicIntervals = new DynamicAgingIntervals();
+    this.priorityAging = new PriorityBasedAging();
+    this.contextAging = new ContextAwareAging();
+    this.fairnessAging = new FairnessAging();
+  }
+
+  handleAdvancedAging(process, currentTime) {
+    // Update fairness metrics
+    this.fairnessAging.calculateFairnessMetrics();
+    
+    // Get dynamic intervals
+    const intervals = this.dynamicIntervals.getAdjustedIntervals();
+    
+    // Check if enough time has passed since last aging check
+    if (currentTime - process.lastAgingCheck < 1) return;
+    
+    process.lastAgingCheck = currentTime;
+    
+    // Calculate aging score
+    const agingScore = this.agingSystem.calculateAgingScore(process, currentTime);
+    
+    // Apply context factors
+    const contextFactor = this.contextAging.getContextFactor(process);
+    const adjustedScore = agingScore * contextFactor;
+    
+    // Apply priority-based aging rates
+    const priorityRate = this.priorityAging.getAgingRate(process.priority, 'demotion');
+    const finalScore = adjustedScore * priorityRate;
+    
+    // Make aging decision
+    if (this.agingSystem.shouldPromote(process, currentTime) || 
+        this.fairnessAging.shouldPromoteForFairness(process)) {
+      this.promoteProcess(process);
+    } else if (this.agingSystem.shouldDemote(process, currentTime)) {
+      this.demoteProcess(process);
+    }
+  }
+
+  promoteProcess(process) {
+    if (process.priority > 1) {
+      console.log(`Advanced Aging: Promoting ${process.name} from priority ${process.priority} to ${process.priority - 1}`);
+      process.priority--;
+      process.waitingTime = 0;
+      process.processingTime = 0;
+    }
+  }
+
+  demoteProcess(process) {
+    if (process.priority < 3) {
+      console.log(`Advanced Aging: Demoting ${process.name} from priority ${process.priority} to ${process.priority + 1}`);
+      process.priority++;
+      process.processingTime = 0;
+    }
+  }
+}
+```
+
+## 8. Configuration and Tuning
+
+### User-Configurable Aging Parameters
+```javascript
+// Add to settings in HTML
+<div class="aging-settings">
+  <h4>Advanced Aging Settings</h4>
+  <label>Aging Factor - Processing Time: 
+    <input type="range" id="agingProcessing" min="0" max="1" step="0.1" value="0.3">
+    <span id="agingProcessingValue">0.3</span>
+  </label>
+  <label>Aging Factor - Waiting Time: 
+    <input type="range" id="agingWaiting" min="0" max="1" step="0.1" value="0.25">
+    <span id="agingWaitingValue">0.25</span>
+  </label>
+  <label>Promotion Threshold: 
+    <input type="range" id="promotionThreshold" min="0" max="1" step="0.1" value="0.7">
+    <span id="promotionThresholdValue">0.7</span>
+  </label>
+  <label>Demotion Threshold: 
+    <input type="range" id="demotionThreshold" min="0" max="1" step="0.1" value="0.8">
+    <span id="demotionThresholdValue">0.8</span>
+  </label>
+</div>
+```
+
+## 9. Visualization of Advanced Aging
+
+### Aging Metrics Display
+```javascript
+function renderAgingMetrics() {
+  const agingMetricsDiv = document.getElementById('agingMetrics');
+  const agingManager = new AdvancedAgingManager();
+  
+  agingManager.fairnessAging.calculateFairnessMetrics();
+  const fairnessScore = agingManager.fairnessAging.calculateFairnessScore();
+  
+  agingMetricsDiv.innerHTML = `
+    <h4>Aging Metrics</h4>
+    <div class="metric">
+      <span>Fairness Score: ${(fairnessScore * 100).toFixed(1)}%</span>
+      <div class="progress-bar">
+        <div class="progress" style="width: ${fairnessScore * 100}%"></div>
+      </div>
+    </div>
+    <div class="metric">
+      <span>Max Waiting Time: ${agingManager.fairnessAging.fairnessMetrics.maxWaitingTime}</span>
+    </div>
+    <div class="metric">
+      <span>Average Waiting Time: ${agingManager.fairnessAging.fairnessMetrics.averageWaitingTime.toFixed(1)}</span>
+    </div>
+  `;
+}
+```
+
+## 10. Benefits of Advanced Aging
+
+### Improved System Performance
+- **Better Fairness**: Ensures all processes get reasonable CPU time
+- **Reduced Starvation**: More sophisticated promotion mechanisms
+- **Adaptive Behavior**: System adjusts to different workloads
+- **Context Awareness**: Considers process state and system conditions
+
+### Educational Value
+- **Complex Decision Making**: Shows how real systems make scheduling decisions
+- **Multiple Factors**: Demonstrates that scheduling involves many considerations
+- **Tunable Parameters**: Allows experimentation with different aging strategies
+- **Performance Analysis**: Provides metrics to evaluate aging effectiveness
+
+## Implementation Steps
+
+1. **Start Simple**: Begin with multi-factor aging
+2. **Add Dynamic Intervals**: Implement load-based interval adjustment
+3. **Include Context Awareness**: Add I/O and quantum expiry factors
+4. **Implement Fairness**: Add fairness-based promotion logic
+5. **Add Visualization**: Create metrics display for aging decisions
+6. **Make Configurable**: Allow users to adjust aging parameters
+
+This advanced aging system would significantly enhance your simulator's educational value and demonstrate sophisticated scheduling concepts used in real operating systems.
