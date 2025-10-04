@@ -208,6 +208,11 @@ h4 {
   background-color: #d4edda;
 }
 
+#priority4-bar {
+  border-color: #6c757d;
+  background-color: #e9ecef;
+}
+
 table {
   border-collapse: collapse;
   width: 100%;

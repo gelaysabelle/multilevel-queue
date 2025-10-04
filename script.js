@@ -6,18 +6,19 @@ let currentTimeDisplay = document.getElementById("currentTimeDisplay");
 let priorityBars = [
   document.getElementById("priority1-bar"),
   document.getElementById("priority2-bar"),
-  document.getElementById("priority3-bar")
+  document.getElementById("priority3-bar"),
+  document.getElementById("priority4-bar")
 ];
 
 // Debug: Check if priority bar elements are found
 console.log("Priority bars found:", priorityBars.map((bar, i) => `Level ${i+1}: ${bar ? 'Found' : 'NOT FOUND'}`));
 
 let processes = [];
-let readyQueues = [[], [], []]; // level 1, 2, 3
+let readyQueues = [[], [], [], []]; // level 1, 2, 3, 4
 let simulationStarted = false;
 let currentTime = 0;
 let currentProcess = null;
-let quantumCounters = [0, 0, 0];
+let quantumCounters = [0, 0, 0, 0];
 let arrivedProcesses = new Set(); // Track which processes have already arrived
 
 let ganttBlocks = []; // For merged display
@@ -33,13 +34,13 @@ let lastTickValue = 0;           // last time value appended to the axis (monoto
 
 // Default processes
 const defaultProcesses = [
-  { name: "P1", arrivalTime: 1, burstTime: 20, priority: 3 },
+  { name: "P1", arrivalTime: 1, burstTime: 20, priority: 4 },
   { name: "P2", arrivalTime: 3, burstTime: 10, priority: 2 },
-  { name: "P3", arrivalTime: 5, burstTime: 2,  priority: 1 },
+  { name: "P3", arrivalTime: 5, burstTime: 2, priority: 1 },
   { name: "P4", arrivalTime: 8, burstTime: 7,  priority: 2 },
-  { name: "P5", arrivalTime: 11, burstTime: 15, priority: 3 },
-  { name: "P6", arrivalTime: 15, burstTime: 8,  priority: 2 },
-  { name: "P7", arrivalTime: 20, burstTime: 4,  priority: 1 },
+  { name: "P5", arrivalTime: 11, burstTime: 15,  priority: 3 },
+  { name: "P6", arrivalTime: 15, burstTime: 8, priority: 2 },
+  { name: "P7", arrivalTime: 20, burstTime: 9,  priority: 1 },
 ];
 
 // ===== Settings =====
@@ -49,6 +50,7 @@ function getSettings() {
       parseInt(document.getElementById("quantum1").value),
       parseInt(document.getElementById("quantum2").value),
       parseInt(document.getElementById("quantum3").value),
+      parseInt(document.getElementById("quantum4").value),
     ],
     agingInterval: parseInt(document.getElementById("agingInterval").value),
     starvationInterval: parseInt(document.getElementById("starvationInterval").value),
@@ -112,14 +114,14 @@ function addRow(name = "", at = "", bt = "", prio = "") {
 
 function resetSimulation() {
   processes = [];
-  readyQueues = [[], [], []];
+  readyQueues = [[], [], [], []];
   simulationStarted = false;
   currentTime = 0;
   currentProcess = null;
   ganttBlocks = [];
   lastProcessTime = 0;
   arrivedProcesses = new Set();
-  quantumCounters = [0, 0, 0];
+  quantumCounters = [0, 0, 0, 0];
   processTable.innerHTML = "";
   ganttChart.innerHTML = "";
   timeIndicators.innerHTML = "";
@@ -148,13 +150,13 @@ function startSimulation() {
   
   // Reset state
   processes = [];
-  readyQueues = [[], [], []];
+  readyQueues = [[], [], [], []];
   arrivedProcesses = new Set();
   currentProcess = null;
   currentTime = 0;
   ganttBlocks = [];
   lastProcessTime = 0;
-  quantumCounters = [0, 0, 0];
+  quantumCounters = [0, 0, 0, 0];
 
   // NEW: publish unit width to CSS so layout stays consistent
   document.documentElement.style.setProperty('--unit', `${TIME_UNIT_PX}px`);
@@ -173,8 +175,8 @@ function startSimulation() {
     let priority = parseInt(prio);
     
     // Validate inputs
-    if (priority < 1 || priority > 3) {
-      alert(`Invalid priority for ${name}. Priority must be between 1 and 3.`);
+    if (priority < 1 || priority > 4) {
+      alert(`Invalid priority for ${name}. Priority must be between 1 and 4.`);
       return;
     }
     
@@ -205,6 +207,18 @@ function startSimulation() {
     timeIndicators.scrollLeft = ganttChart.scrollLeft;
   });
   
+  // Handle process arrivals at time 0
+  handleProcessArrivals();
+  
+  // Select initial process if any are available at time 0
+  let settings = getSettings();
+  handleRoundRobinScheduling(settings);
+  
+  // Update Gantt chart for time 0 if a process is running
+  if (currentProcess) {
+    updateGanttChart();
+  }
+  
   // Render initial state (time 0)
   renderUI();
   
@@ -217,7 +231,7 @@ function startSimulation() {
 function handleRoundRobinScheduling(settings) {
   if (!currentProcess) {
     // Select next process from highest priority queue
-    for (let lvl = 0; lvl < 3; lvl++) {
+    for (let lvl = 0; lvl < 4; lvl++) {
       if (readyQueues[lvl].length > 0) {
         currentProcess = readyQueues[lvl].shift();
         quantumCounters[lvl] = settings.quantum[lvl];
@@ -244,7 +258,7 @@ function handleProcessArrivals() {
 // Aging and Starvation Management
 function handleAgingAndStarvation(settings) {
   // Check each process in each ready queue for aging/starvation
-  for (let lvl = 0; lvl < 3; lvl++) {
+  for (let lvl = 0; lvl < 4; lvl++) {
     let queue = readyQueues[lvl];
     for (let i = queue.length - 1; i >= 0; i--) {
       let p = queue[i];
@@ -258,7 +272,7 @@ function handleAgingAndStarvation(settings) {
         readyQueues[p.priority - 1].push(p); // Add to higher priority queue
       }
       // Aging - processing time reaches agingInterval, decrease priority (move to lower priority queue)
-      else if (p.processingTime >= settings.agingInterval && p.priority < 3) {
+      else if (p.processingTime >= settings.agingInterval && p.priority < 4) {
         console.log(`Aging: ${p.name} moving from priority ${p.priority} to ${p.priority + 1}`);
         queue.splice(i, 1); // Remove from current queue
         p.priority++;
@@ -269,7 +283,7 @@ function handleAgingAndStarvation(settings) {
   }
   
   // Also check current process for aging
-  if (currentProcess && currentProcess.processingTime >= settings.agingInterval && currentProcess.priority < 3) {
+  if (currentProcess && currentProcess.processingTime >= settings.agingInterval && currentProcess.priority < 4) {
     console.log(`Aging: Current process ${currentProcess.name} moving from priority ${currentProcess.priority} to ${currentProcess.priority + 1}`);
     // Move current process to lower priority queue
     currentProcess.priority++;
@@ -282,7 +296,7 @@ function handleAgingAndStarvation(settings) {
 
 // Starvation promotions ONLY: run before arrivals as first precedence
 function handleStarvationPromotions(settings) {
-  for (let lvl = 0; lvl < 3; lvl++) {
+  for (let lvl = 0; lvl < 4; lvl++) {
     let queue = readyQueues[lvl];
     for (let i = queue.length - 1; i >= 0; i--) {
       let p = queue[i];
@@ -353,7 +367,7 @@ function nextStep() {
   appendTickPerUnit(currentTime); // keeps "0..t" laid out without touching earlier ticks
 
   // 2. First precedence: increment waiting time for all queued processes, then promote due to starvation
-  for (let lvl = 0; lvl < 3; lvl++) {
+  for (let lvl = 0; lvl < 4; lvl++) {
     readyQueues[lvl].forEach(p => {
       p.waitingTime++;
     });
@@ -389,7 +403,7 @@ function nextStep() {
       // Third precedence: re-enqueue the running process with optional demotion based on processing units
       const demoteThreshold = settings.expiryDemotionInterval;
       let targetPriority = currentProcess.priority;
-      if (currentProcess.processingTime >= demoteThreshold && currentProcess.priority < 3) {
+      if (currentProcess.processingTime >= demoteThreshold && currentProcess.priority < 4) {
         targetPriority = currentProcess.priority + 1; // decrease priority number means higher; here larger number is lower priority, so +1
         console.log(`Quantum expired for ${currentProcess.name}; processingTime=${currentProcess.processingTime} >= ${demoteThreshold}. Demoting to priority ${targetPriority} and resetting processingTime.`);
         currentProcess.priority = targetPriority;
@@ -434,7 +448,7 @@ function renderUI() {
   priorityBars.forEach(bar => bar.innerHTML = "");
   
   // Render each priority level
-  for (let lvl = 0; lvl < 3; lvl++) {
+  for (let lvl = 0; lvl < 4; lvl++) {
     let bar = priorityBars[lvl];
     let queue = readyQueues[lvl];
     
