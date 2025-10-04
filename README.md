@@ -976,3 +976,255 @@ function renderAgingMetrics() {
 6. **Make Configurable**: Allow users to adjust aging parameters
 
 This advanced aging system would significantly enhance your simulator's educational value and demonstrate sophisticated scheduling concepts used in real operating systems.
+
+# Simple Multi-Factor Aging System (30-Minute Implementation)
+
+## Overview
+This is a simplified multi-factor aging system that uses only the data you already track in your current multilevel queue scheduler. No I/O operations or complex metrics - just enhanced aging based on existing process properties.
+
+## What We're Using (Already in Your Code)
+- **Processing Time**: `process.processingTime` (already tracked)
+- **Waiting Time**: `process.waitingTime` (already tracked)  
+- **Total Time**: `currentTime - process.arrivalTime` (can be calculated)
+- **Priority Level**: `process.priority` (already tracked)
+
+## Implementation Changes (30 Minutes)
+
+### 1. **Add New Properties to Process Objects** (3 minutes)
+In your `startSimulation()` function, when creating processes:
+
+```javascript
+// Current process creation
+processes.push({
+  name, arrivalTime, burstTime, remainingTime: burstTime, priority,
+  processingTime: 0, waitingTime: 0
+});
+
+// Enhanced process creation
+processes.push({
+  name, arrivalTime, burstTime, remainingTime: burstTime, priority,
+  processingTime: 0, waitingTime: 0,
+  totalTime: 0,           // NEW: Total time since arrival
+  agingScore: 0           // NEW: Calculated aging score
+});
+```
+
+### 2. **Add Aging Settings** (2 minutes)
+In your `getSettings()` function:
+
+```javascript
+function getSettings() {
+  return {
+    quantum: [
+      parseInt(document.getElementById("quantum1").value),
+      parseInt(document.getElementById("quantum2").value),
+      parseInt(document.getElementById("quantum3").value),
+    ],
+    agingInterval: parseInt(document.getElementById("agingInterval").value),
+    starvationInterval: parseInt(document.getElementById("starvationInterval").value),
+    expiryDemotionInterval: (function() {
+      const el = document.getElementById("expiryDemotionInterval");
+      const v = el ? parseInt(el.value) : NaN;
+      return Number.isFinite(v) && v > 0 ? v : 6;
+    })(),
+    // NEW: Multi-factor aging settings
+    agingWeights: {
+      processingTime: 0.4,    // 40% weight
+      waitingTime: 0.35,      // 35% weight
+      totalTime: 0.25         // 25% weight
+    },
+    agingThreshold: 0.7       // Score above this triggers aging
+  };
+}
+```
+
+### 3. **Add HTML Controls** (5 minutes)
+Add to your settings section in `index.html`:
+
+```html
+<!-- Add after your existing settings -->
+<div class="aging-settings">
+  <h4>Multi-Factor Aging Settings</h4>
+  <label>Processing Time Weight: 
+    <input type="range" id="agingProcessing" min="0" max="1" step="0.05" value="0.4">
+    <span id="agingProcessingValue">0.4</span>
+  </label>
+  <label>Waiting Time Weight: 
+    <input type="range" id="agingWaiting" min="0" max="1" step="0.05" value="0.35">
+    <span id="agingWaitingValue">0.35</span>
+  </label>
+  <label>Total Time Weight: 
+    <input type="range" id="agingTotal" min="0" max="1" step="0.05" value="0.25">
+    <span id="agingTotalValue">0.25</span>
+  </label>
+  <label>Aging Threshold: 
+    <input type="range" id="agingThreshold" min="0" max="1" step="0.05" value="0.7">
+    <span id="agingThresholdValue">0.7</span>
+  </label>
+</div>
+```
+
+### 4. **Create Multi-Factor Aging Function** (8 minutes)
+Add this new function to your script.js:
+
+```javascript
+// NEW: Multi-factor aging calculation
+function calculateAgingScore(process, settings) {
+  const weights = settings.agingWeights;
+  
+  // Calculate total time since arrival
+  const totalTime = currentTime - process.arrivalTime;
+  
+  // Normalize each factor to 0-1 scale
+  const processingScore = Math.min(process.processingTime / 20, 1);
+  const waitingScore = Math.min(process.waitingTime / 15, 1);
+  const totalScore = Math.min(totalTime / 30, 1);
+  
+  // Calculate weighted aging score
+  const agingScore = (processingScore * weights.processingTime) +
+                    (waitingScore * weights.waitingTime) +
+                    (totalScore * weights.totalTime);
+  
+  // Store the score for display
+  process.agingScore = agingScore;
+  
+  return agingScore;
+}
+```
+
+### 5. **Update Aging Logic** (10 minutes)
+Replace the aging logic in your `handleAgingAndStarvation()` function:
+
+```javascript
+// OLD: Simple aging logic
+// else if (p.processingTime >= settings.agingInterval && p.priority < 3) {
+//   console.log(`Aging: ${p.name} moving from priority ${p.priority} to ${p.priority + 1}`);
+//   queue.splice(i, 1);
+//   p.priority++;
+//   p.processingTime = 0;
+//   readyQueues[p.priority - 1].push(p);
+// }
+
+// NEW: Multi-factor aging logic
+else if (calculateAgingScore(p, settings) >= settings.agingThreshold && p.priority < 3) {
+  console.log(`Multi-Factor Aging: ${p.name} (score: ${p.agingScore.toFixed(2)}) moving from priority ${p.priority} to ${p.priority + 1}`);
+  queue.splice(i, 1);
+  p.priority++;
+  p.processingTime = 0;
+  readyQueues[p.priority - 1].push(p);
+}
+```
+
+Also update the current process aging check:
+
+```javascript
+// OLD: Simple current process aging
+// if (currentProcess && currentProcess.processingTime >= settings.agingInterval && currentProcess.priority < 3) {
+//   console.log(`Aging: Current process ${currentProcess.name} moving from priority ${currentProcess.priority} to ${currentProcess.priority + 1}`);
+//   currentProcess.priority++;
+//   currentProcess.processingTime = 0;
+//   readyQueues[currentProcess.priority - 1].push(currentProcess);
+//   currentProcess = null;
+// }
+
+// NEW: Multi-factor current process aging
+if (currentProcess && calculateAgingScore(currentProcess, settings) >= settings.agingThreshold && currentProcess.priority < 3) {
+  console.log(`Multi-Factor Aging: Current process ${currentProcess.name} (score: ${currentProcess.agingScore.toFixed(2)}) moving from priority ${currentProcess.priority} to ${currentProcess.priority + 1}`);
+  currentProcess.priority++;
+  currentProcess.processingTime = 0;
+  readyQueues[currentProcess.priority - 1].push(currentProcess);
+  currentProcess = null;
+}
+```
+
+### 6. **Update Time Tracking** (2 minutes)
+In your `nextStep()` function, add total time calculation:
+
+```javascript
+// Add this in the time increment section
+processes.forEach(p => {
+  if (p.remainingTime > 0) {
+    p.totalTime = currentTime - p.arrivalTime;
+  }
+});
+```
+
+### 7. **Update Process Display** (5 minutes)
+In your `renderUI()` function, show the aging score in process cards:
+
+```javascript
+// In the process card creation section
+card.innerHTML = `
+  <div class="process-name">${p.name}</div>
+  <div class="process-info">
+    <span><span class="label">Aging Score:</span> ${p.agingScore.toFixed(2)}</span>
+    <span><span class="label">Remaining BT:</span> ${p.remainingTime}</span>
+    <span><span class="label">Processing Time:</span> ${p.processingTime}</span>
+    <span><span class="label">Waiting Time:</span> ${p.waitingTime}</span>
+    <span><span class="label">Total Time:</span> ${p.totalTime}</span>
+    <span><span class="label">Arrival Time:</span> ${p.arrivalTime}</span>
+  </div>
+`;
+```
+
+### 8. **Add Event Listeners for Settings** (3 minutes)
+Add to your event listeners section:
+
+```javascript
+// Add these event listeners
+document.getElementById("agingProcessing").addEventListener("input", function() {
+  document.getElementById("agingProcessingValue").textContent = this.value;
+});
+
+document.getElementById("agingWaiting").addEventListener("input", function() {
+  document.getElementById("agingWaitingValue").textContent = this.value;
+});
+
+document.getElementById("agingTotal").addEventListener("input", function() {
+  document.getElementById("agingTotalValue").textContent = this.value;
+});
+
+document.getElementById("agingThreshold").addEventListener("input", function() {
+  document.getElementById("agingThresholdValue").textContent = this.value;
+});
+```
+
+## How It Works
+
+### **Aging Score Calculation**
+```javascript
+// Example: Process P1
+// Processing Time: 8 (normalized to 8/20 = 0.4)
+// Waiting Time: 6 (normalized to 6/15 = 0.4)  
+// Total Time: 12 (normalized to 12/30 = 0.4)
+
+// Weighted Score:
+// (0.4 * 0.4) + (0.4 * 0.35) + (0.4 * 0.25) = 0.4
+
+// If threshold is 0.7, this process won't be aged yet
+// If threshold is 0.3, this process will be aged
+```
+
+### **Benefits Over Simple Aging**
+- **More Fair**: Considers multiple factors, not just processing time
+- **Configurable**: Users can adjust weights and thresholds
+- **Educational**: Shows how real systems make complex decisions
+- **Visual**: Users can see aging scores in real-time
+
+## Testing the Implementation
+
+1. **Start with default settings** (threshold = 0.7)
+2. **Run simulation** and observe aging scores
+3. **Lower threshold** to 0.3 to see more aging
+4. **Adjust weights** to see how different factors affect aging
+5. **Compare** with old simple aging behavior
+
+## Expected Results
+
+- **Processes with high processing time** will have higher aging scores
+- **Processes with high waiting time** will have higher aging scores  
+- **Processes with high total time** will have higher aging scores
+- **Aging decisions** will be more nuanced and fair
+- **Users can experiment** with different aging strategies
+
+This implementation gives you a sophisticated multi-factor aging system using only the data you already track, making it perfect for a 30-minute enhancement!
